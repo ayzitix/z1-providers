@@ -1,0 +1,31 @@
+z1-providers
+============
+
+The code in this repository (scripts, node definitions, installer, tests and
+documentation) is MIT licensed; see LICENSE.
+
+Catalog data
+------------
+
+`data/catalog.json` is a pruned copy of the open provider/model catalog published
+by models.dev:
+
+  https://models.dev/api.json
+  https://github.com/anomalyco/models.dev
+
+  models.dev — MIT License — Copyright (c) 2025 models.dev
+
+The upstream repository holds one TOML file per provider
+(`providers/<id>/provider.toml` and `providers/<id>/models/*.toml`); the JSON
+endpoint used here is its built form. `data/catalog.json` keeps only the fields
+this module needs, in the upstream field order, with the upstream values
+untouched. Regenerate it with `node scripts/generate.ts --from-url` and see the
+git history for the snapshot date.
+
+Model and provider names, prices and capability flags are facts about
+third-party services, reproduced from that catalog so a z1 graph can be built
+offline. Check the upstream catalogue for the authoritative and current values.
+
+`data/overrides.json` is hand-written: it lists API base URLs for providers whose
+upstream entry has no `api` field, each with the documentation page it was taken
+from.
