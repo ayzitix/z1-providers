@@ -285,13 +285,34 @@ function buildProvider(
 function buildProviders(payload: unknown, overrides: Record<string, OverrideEntry>): ProviderRow[] {
   const source = isRecord(payload) && isRecord(payload['providers']) ? payload['providers'] : payload
   if (!isRecord(source)) throw new Error('payload must be an object keyed by provider id')
-  return Object.keys(source)
+  const built = Object.keys(source)
     .sort()
     .map((id) => {
       const entry = source[id]
       if (!isRecord(entry)) throw new Error(`provider "${id}" is not an object`)
       return buildProvider(id, entry, overrides)
     })
+
+  // Node ids are derived from provider ids, so an upstream id can collide with
+  // the escape used for digit-leading ids (302ai → p-302ai) or with another
+  // provider. Fail here, at generation, not when the host registers a duplicate.
+  const byNodeId = new Map<string, string>()
+  for (const provider of built) {
+    if (/^p-\d/.test(provider.id)) {
+      throw new Error(
+        `provider id "${provider.id}" is reserved: "p-" is the prefix used for digit-leading ids`,
+      )
+    }
+    const nodeId = nodeIdFor(provider.id)
+    const previous = byNodeId.get(nodeId)
+    if (previous !== undefined) {
+      throw new Error(
+        `providers "${previous}" and "${provider.id}" both map to node id "${nodeId}"`,
+      )
+    }
+    byNodeId.set(nodeId, provider.id)
+  }
+  return built
 }
 
 // ---------------------------------------------------------------------------

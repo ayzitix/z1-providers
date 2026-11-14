@@ -139,7 +139,7 @@ test('a missing template variable skips with --all and fails with --only', () =>
   const bulk = install(['--file', file, '--dry-run'], env)
   assert.equal(bulk.status, 0, bulk.stderr)
   assert.match(bulk.stdout, /- neon \(needs NEON_AI_GATEWAY_BASE_URL; skipped\)/)
-  assert.match(bulk.stdout, /5 skipped/)
+  assert.match(bulk.stdout, /9 skipped/)
 
   const explicit = install(['--file', file, '--only', 'neon'], env)
   assert.equal(explicit.status, 1)
@@ -164,8 +164,10 @@ test('--all is the default and --all with --only is a usage error', () => {
   const file = join(dir, 'z1.config.json')
   const result = install(['--file', file, '--dry-run'])
   assert.equal(result.status, 0, result.stderr)
-  assert.match(result.stdout, /dry run: 206 added/)
-  assert.match(result.stdout, /5 skipped/)
+  // 211 supported - 5 needing an unset placeholder - 4 loopback = 202.
+  assert.match(result.stdout, /dry run: 202 added/)
+  assert.match(result.stdout, /9 skipped/)
+  assert.match(result.stdout, /- lmstudio \(loopback base URL; install it explicitly with --only; skipped\)/)
 
   const conflict = runScript(INSTALL, ['--file', file, '--all', '--only', 'openai'])
   assert.equal(conflict.status, 2)

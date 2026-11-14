@@ -1,3 +1,5 @@
 node_modules/
 *.log
 .tmp/
+# Written by scripts/install-providers.ts in this directory by default.
+z1.config.json
