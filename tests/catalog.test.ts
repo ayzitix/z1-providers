@@ -15,9 +15,7 @@ import {
   NODE_VERSION,
   OPENAI_TRANSPORT,
   allProviders,
-  defaultModel,
   loadCatalog,
-  modelIds,
   nodeIdFor,
   providerById,
 } from '../lib/catalog.js'
@@ -48,8 +46,18 @@ test('the catalog keeps the source and a provider count', () => {
   const catalog = loadCatalog()
   assert.equal(catalog.source, 'https://models.dev/api.json')
   assert.equal(catalog.providers.length, 236, 'provider count changed; regenerate and review')
-  const total = catalog.providers.reduce((sum, provider) => sum + modelIds(provider).length, 0)
-  assert.equal(total, 9135, 'model count changed; regenerate and review')
+})
+
+test('the catalog stores connections, never models', () => {
+  const catalog = loadCatalog()
+  for (const provider of catalog.providers) {
+    assert.ok(!('models' in provider), `${provider.id} still carries a model list`)
+  }
+  // The whole point of dropping the list: a diff of the catalog is a diff of
+  // endpoints, not of somebody's model catalogue.
+  const raw = readFileSync(join(REPO, 'data', 'catalog.json'), 'utf8')
+  assert.match(raw, /"transport"/)
+  assert.doesNotMatch(raw, /"tool_call"|"cache_read"|"limit"/)
 })
 
 test('provider ids are unique and every one maps to a legal node id', () => {
@@ -124,15 +132,6 @@ test('templated base URLs are the documented five providers', () => {
   for (const provider of templated) {
     assert.equal(provider.transport, 'openai-completions', provider.id)
     assert.match(provider.api ?? '', /\$\{[A-Z][A-Z0-9_]*\}/, provider.id)
-  }
-})
-
-test('the default model is deterministic and belongs to the provider', () => {
-  for (const provider of allProviders()) {
-    const first = defaultModel(provider)
-    const second = defaultModel({ ...provider, models: [...provider.models].reverse() })
-    assert.equal(first, second, `${provider.id} default model depends on input order`)
-    if (first !== undefined) assert.ok(modelIds(provider).includes(first), provider.id)
   }
 })
 

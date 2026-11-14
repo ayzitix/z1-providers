@@ -1,10 +1,12 @@
 # z1 providers
 
-One z1 node per [models.dev](https://models.dev) provider, plus the catalog the
-nodes read and a script that registers a provider with a z1 host.
+One z1 node per [models.dev](https://models.dev) provider, plus the connection
+catalog the nodes read and a script that registers a provider with a z1 host.
 
-236 providers, 9135 models. Every provider is a node; a graph picks the provider
-by placing the node and the model by its config:
+236 providers. The repository stores **how to connect**, not what a provider
+serves: model ids are discovered live (`GET {baseURL}/models`) and cached in
+memory for five minutes. A graph picks the provider by placing the node and,
+optionally, pins the model:
 
 ```json
 {
@@ -13,6 +15,15 @@ by placing the node and the model by its config:
   "version": "1.0.0",
   "config": { "model": "gpt-4.1-mini" }
 }
+```
+
+`config.model` is optional. Without it the node asks the provider what it has,
+uses the first id and logs a warning telling you to pin one. With it, no lookup
+happens at all.
+
+```bash
+z1 models openai          # what the provider serves right now
+z1 models --json | jq .
 ```
 
 The ports mirror `z1.llm.chat` (`in`, `messages`, `prompt`, `system`, `tools` →
@@ -59,19 +70,38 @@ z1 module list
 | non-OpenAI protocol | 12 | Anthropic, Google, Cohere, Mistral, Bedrock — no transport in z1 yet |
 
 Unsupported providers are nodes on purpose: a graph can be authored against the
-real catalog, and the node fails at execution with the reason and a few model
-ids. Five supported providers (`cloudflare-workers-ai`, `databricks`,
-`infomaniak`, `neon`, `snowflake-cortex`) have an account placeholder in their
-base URL; the installer expands `${VAR}` from the environment and skips the
-provider when the variable is unset.
+real list, and the node fails at execution with the reason. Five supported
+providers (`cloudflare-workers-ai`, `databricks`, `infomaniak`, `neon`,
+`snowflake-cortex`) have an account placeholder in their base URL; the installer
+expands `${VAR}` from the environment and skips the provider when the variable is
+unset.
+
+## Model discovery
+
+`ctx.llm.models(provider)` is a host capability: the host holds the key, calls
+`GET {baseURL}/models`, checks the same `llm` grant as `chat`, and caches the
+answer per provider for five minutes (concurrent callers share one request). A
+provider that does not implement the endpoint fails with its own status, and the
+node then requires an explicit `config.model`.
+
+The list is never written to disk and never merged into `data/catalog.json`. A
+model id the provider no longer serves produces an error enriched with the ids it
+does serve, fetched at the moment it matters.
+
+Why discovery instead of a copied catalogue: `/models` is the only source that is
+true when a run happens. Providers add and retire ids weekly, and a committed
+list goes stale silently. The trade-off is one request per provider per five
+minutes; a pinned `config.model` avoids even that.
 
 ## Data
 
 - Source: `https://models.dev/api.json`, the built form of the
-  [models.dev repository](https://github.com/anomalyco/models.dev) (MIT).
-- `data/catalog.json` is generated, pruned and committed, so a checkout needs no
-  network: provider id, name, env, npm package, API root, transport, reason, and
-  per model `limit.context`, `cost`, `tool_call`, `reasoning`, `modalities`.
+  [models.dev repository](https://github.com/anomalyco/models.dev) (MIT). Only
+  the connection fields are taken from it, so `data/catalog.json` is 76 KB
+  rather than megabytes of model metadata.
+- `data/catalog.json` is generated, pruned and committed: provider id, name,
+  env, npm package, API root, transport and the reason it is unsupported. No
+  models, no prices, no context windows.
 - `data/overrides.json` is hand-maintained: base URLs models.dev does not carry
   (the SDK's own default), each with the `doc` URL it came from.
 
@@ -93,8 +123,11 @@ The generator also accepts `--from-json <file>` for an offline copy.
   provider from the module manifest is the next change (see `DESIGN.md`).
 - `--all` writes 206 providers into one file. For a real project, install the
   handful you use.
-- A model id is validated against the catalog at execution time, so a typo names
-  the real ids instead of reaching the provider.
+- Discovery costs one request per provider per five minutes; a provider without
+  `/models` needs an explicit `config.model`.
+- A discovered list is ids only. Context windows, pricing and capabilities are
+  provider extensions, not part of the OpenAI `/models` contract, so this module
+  does not pretend to know them.
 
 ## Licence
 

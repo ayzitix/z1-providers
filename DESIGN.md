@@ -12,6 +12,12 @@ provider. Today the user runs `scripts/install-providers.ts` and edits a project
 config file. That works, but the provider list is data the module already
 carries; making the user duplicate it in every project is a wart.
 
+The other half is already solved the right way: models are **not** stored. A node
+asks `ctx.llm.models(provider)` and the host performs `GET {baseURL}/models`
+with the credential it holds, caches the answer in memory and enforces the same
+`llm` grant as `chat`. Nothing about a provider's catalogue is committed, so no
+list can go stale; the only thing left to declare is the connection.
+
 ## Proposal
 
 Let a module manifest declare providers, and merge them into the runtime

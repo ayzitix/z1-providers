@@ -1,6 +1,6 @@
 /**
- * Execution contract of a generated node: the request it builds, the outputs it
- * mirrors from `z1.llm.chat`, and the two errors a user can actually hit.
+ * Execution contract of a generated node: the request it builds, the live model
+ * discovery behind `config.model`, and the errors a user can actually hit.
  *
  * The context is a stub the shape of `NodeContext`; nothing here touches the
  * network or the host.
@@ -9,18 +9,25 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 
-import { allProviders, nodeIdFor, providerById } from '../lib/catalog.js'
+import { allProviders, nodeIdFor } from '../lib/catalog.js'
 import { nodes } from '../index.js'
 
 interface Recorded {
   requests: unknown[]
   deltas: { port: string; chunk: unknown }[]
+  logs: { level: string; message: string }[]
+  listCalls: string[]
 }
 
-function makeContext(
-  recorded: Recorded,
-  options: { config?: unknown; inputs?: unknown; result?: unknown } = {},
-) {
+interface ContextOptions {
+  config?: unknown
+  inputs?: unknown
+  models?: { id: string }[]
+  modelsError?: Error
+  chat?: (request: unknown) => unknown
+}
+
+function makeContext(recorded: Recorded, options: ContextOptions = {}) {
   return {
     config: options.config ?? {},
     inputs: options.inputs ?? {},
@@ -28,28 +35,39 @@ function makeContext(
     runId: 'run_test',
     nodeId: 'z1.providers.test',
     path: 'provider',
+    log(level: string, message: string) {
+      recorded.logs.push({ level, message })
+    },
     emit(port: string, chunk: unknown) {
       recorded.deltas.push({ port, chunk })
       return undefined
     },
     llm: {
+      async models(provider: string) {
+        recorded.listCalls.push(provider)
+        if (options.modelsError !== undefined) throw options.modelsError
+        return options.models ?? [{ id: 'listed-a' }, { id: 'listed-b' }]
+      },
       async chat(request: unknown, onDelta?: (delta: { type: string; text: string }) => void) {
         recorded.requests.push(request)
+        if (options.chat !== undefined) return await options.chat(request)
         onDelta?.({ type: 'text', text: 'po' })
         onDelta?.({ type: 'text', text: 'ng' })
-        return (
-          options.result ?? {
-            message: { role: 'assistant', content: 'pong' },
-            toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'a.txt' } }],
-            usage: { inputTokens: 3, outputTokens: 1 },
-            stopReason: 'tool-calls',
-          }
-        )
+        return {
+          message: { role: 'assistant', content: 'pong' },
+          toolCalls: [{ id: 'call_1', name: 'read', arguments: { path: 'a.txt' } }],
+          usage: { inputTokens: 3, outputTokens: 1 },
+          stopReason: 'tool-calls',
+        }
       },
     },
     tools: { list: async () => [], call: async () => null },
     memory: undefined,
   }
+}
+
+function fresh(): Recorded {
+  return { requests: [], deltas: [], logs: [], listCalls: [] }
 }
 
 function providerNode(providerId: string) {
@@ -70,11 +88,12 @@ test('one node per catalog provider, in the same order', () => {
     assert.equal(node.version, '1.0.0')
     assert.equal(node.category, 'provider')
     assert.equal(node.cacheable, false, 'a model turn must never be cached')
+    assert.deepEqual(node.defaultConfig, {}, 'no model is baked in')
   }
 })
 
-test('a supported provider builds the request and mirrors z1.llm.chat outputs', async () => {
-  const recorded: Recorded = { requests: [], deltas: [] }
+test('a pinned model is used without a discovery call', async () => {
+  const recorded = fresh()
   const node = providerNode('openai')
   const outputs = await node.execute(
     makeContext(recorded, {
@@ -83,6 +102,7 @@ test('a supported provider builds the request and mirrors z1.llm.chat outputs', 
     }) as never,
   )
 
+  assert.deepEqual(recorded.listCalls, [], 'a pinned model costs no lookup')
   assert.deepEqual(recorded.requests, [
     {
       model: { provider: 'openai', model: 'gpt-4.1-mini' },
@@ -101,63 +121,129 @@ test('a supported provider builds the request and mirrors z1.llm.chat outputs', 
   assert.equal(outputs.hasToolCalls, true)
   assert.equal(outputs.out, true)
   assert.deepEqual(outputs.usage, { inputTokens: 3, outputTokens: 1 })
-  assert.deepEqual(outputs.toolCalls, [{ id: 'call_1', name: 'read', arguments: { path: 'a.txt' } }])
 })
 
-test('config.model is optional and falls back to the deterministic default', async () => {
-  const recorded: Recorded = { requests: [], deltas: [] }
+test('without config.model the node takes the first live id and says so', async () => {
+  const recorded = fresh()
   const node = providerNode('openai')
-  await node.execute(makeContext(recorded, { inputs: { prompt: 'hi' } }) as never)
+  await node.execute(
+    makeContext(recorded, {
+      config: {},
+      inputs: { prompt: 'hi' },
+      models: [{ id: 'live-first' }, { id: 'live-second' }],
+    }) as never,
+  )
 
-  const expected = providerById('openai')
-  assert.ok(expected !== undefined)
-  const request = recorded.requests[0] as { model: { provider: string; model: string } }
-  assert.equal(request.model.provider, 'openai')
-  assert.match(request.model.model, /\S/)
+  assert.deepEqual(recorded.listCalls, ['openai'])
+  const request = recorded.requests[0] as { model: { model: string } }
+  assert.equal(request.model.model, 'live-first')
+  const warning = recorded.logs.find((entry) => entry.level === 'warn')
+  assert.ok(warning !== undefined, 'defaulting to the first id must be visible')
+  assert.match(warning.message, /no model configured/)
+  assert.match(warning.message, /pin it with config\.model/)
 })
 
-test('an unknown model names five real ids', async () => {
-  const recorded: Recorded = { requests: [], deltas: [] }
+test('an empty live list fails instead of guessing', async () => {
+  const recorded = fresh()
   const node = providerNode('openai')
   await assert.rejects(
     node.execute(
-      makeContext(recorded, { config: { model: 'gpt-nonexistent' }, inputs: { prompt: 'hi' } }) as never,
+      makeContext(recorded, { config: {}, inputs: { prompt: 'hi' }, models: [] }) as never,
+    ),
+    /listed no models; set config\.model explicitly/,
+  )
+})
+
+test('a provider without discovery says so and names the fallback', async () => {
+  const recorded = fresh()
+  const node = providerNode('openai')
+  await assert.rejects(
+    node.execute(
+      makeContext(recorded, {
+        config: {},
+        inputs: { prompt: 'hi' },
+        modelsError: new Error('model discovery failed for https://x/v1 (404)'),
+      }) as never,
     ),
     (error: Error) => {
-      assert.match(error.message, /unknown model "gpt-nonexistent"/)
-      assert.match(error.message, /Known models: /)
+      assert.match(error.message, /cannot discover models for "openai"/)
+      assert.match(error.message, /404/)
+      assert.match(error.message, /Set config\.model explicitly/)
       return true
     },
   )
-  assert.equal(recorded.requests.length, 0, 'a bad model must not reach the provider')
 })
 
-test('an unsupported provider explains the missing transport and names models', async () => {
-  const recorded: Recorded = { requests: [], deltas: [] }
+test('an unsupported provider explains the missing transport', async () => {
+  const recorded = fresh()
   const node = providerNode('anthropic')
   await assert.rejects(node.execute(makeContext(recorded) as never), (error: Error) => {
     assert.match(error.message, /z1 has no transport for it yet/)
     assert.match(error.message, /DESIGN\.md/)
-    assert.match(error.message, /Models it would have offered: /)
     return true
   })
   assert.equal(recorded.requests.length, 0)
+  assert.equal(recorded.listCalls.length, 0, 'no discovery for a provider we cannot call')
 })
 
 test('a no-base-url provider says how to add one', async () => {
-  const recorded: Recorded = { requests: [], deltas: [] }
+  const recorded = fresh()
   const node = providerNode('vercel')
   await assert.rejects(node.execute(makeContext(recorded) as never), (error: Error) =>
     /overrides\.json/.test(error.message),
   )
 })
 
+test('a model-not-found error is enriched with the live ids', async () => {
+  const recorded = fresh()
+  const node = providerNode('openai')
+  await assert.rejects(
+    node.execute(
+      makeContext(recorded, {
+        config: { model: 'gpt-retired' },
+        inputs: { prompt: 'hi' },
+        models: [{ id: 'gpt-a' }, { id: 'gpt-b' }],
+        chat: async () => {
+          throw new Error('openai-compatible request failed (404 Not Found: model not found)')
+        },
+      }) as never,
+    ),
+    (error: Error) => {
+      assert.match(error.message, /model not found/, 'the provider message is preserved')
+      assert.match(error.message, /model "gpt-retired" is not served by "openai"/)
+      assert.match(error.message, /gpt-a, gpt-b/)
+      return true
+    },
+  )
+})
+
+test('an unrelated chat error is not padded with model ids', async () => {
+  const recorded = fresh()
+  const node = providerNode('openai')
+  await assert.rejects(
+    node.execute(
+      makeContext(recorded, {
+        config: { model: 'gpt-a' },
+        inputs: { prompt: 'hi' },
+        chat: async () => {
+          throw new Error('openai-compatible request failed (500 Internal Server Error)')
+        },
+      }) as never,
+    ),
+    (error: Error) => {
+      assert.doesNotMatch(error.message, /is not served by/)
+      return true
+    },
+  )
+  assert.deepEqual(recorded.listCalls, [], 'no lookup for an error that is not about a model')
+})
+
 test('a connected system port wins over config.system and messages pass through', async () => {
-  const recorded: Recorded = { requests: [], deltas: [] }
+  const recorded = fresh()
   const node = providerNode('openai')
   await node.execute(
     makeContext(recorded, {
-      config: { model: 'gpt-4.1-mini', system: 'from config' },
+      config: { model: 'gpt-a', system: 'from config' },
       inputs: {
         messages: [
           { role: 'user', content: 'one' },

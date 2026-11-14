@@ -31,7 +31,6 @@ import {
   NODE_CATEGORY,
   NODE_VERSION,
   OUTPUT_PORTS,
-  defaultModel,
   nodeIdFor,
 } from '../lib/catalog.js'
 
@@ -188,23 +187,6 @@ function printUsage(): void {
 // payload -> catalog
 // ---------------------------------------------------------------------------
 
-interface CostRow {
-  input?: number
-  output?: number
-  cache_read?: number
-  cache_write?: number
-}
-
-interface ModelRow {
-  id: string
-  name: string
-  limit?: { context: number }
-  cost?: CostRow
-  tool_call?: boolean
-  reasoning?: boolean
-  modalities?: string[]
-}
-
 interface ProviderRow {
   id: string
   name: string
@@ -215,7 +197,6 @@ interface ProviderRow {
   transport: 'openai-completions' | 'unsupported'
   protocol: string
   reason?: 'non-openai-protocol' | 'no-base-url'
-  models: ModelRow[]
 }
 
 interface OverrideEntry {
@@ -243,39 +224,6 @@ function readOverrides(file: string): Record<string, OverrideEntry> {
     overrides[id] = override
   }
   return overrides
-}
-
-function pruneCost(raw: unknown): CostRow | undefined {
-  if (!isRecord(raw)) return undefined
-  const cost: CostRow = {}
-  // Keep the source's numbers as given: no rounding, no unit change. Tiered and
-  // audio prices are outside the pruned contract (see README).
-  for (const key of ['input', 'output', 'cache_read', 'cache_write'] as const) {
-    const value = raw[key]
-    if (typeof value === 'number' && Number.isFinite(value)) cost[key] = value
-  }
-  return Object.keys(cost).length > 0 ? cost : undefined
-}
-
-function pruneModel(raw: unknown): ModelRow | undefined {
-  if (!isRecord(raw) || typeof raw['id'] !== 'string') return undefined
-  const model: ModelRow = {
-    id: raw['id'],
-    name: typeof raw['name'] === 'string' ? raw['name'] : raw['id'],
-  }
-  const limit = raw['limit']
-  if (isRecord(limit) && typeof limit['context'] === 'number') {
-    model.limit = { context: limit['context'] }
-  }
-  const cost = pruneCost(raw['cost'])
-  if (cost !== undefined) model.cost = cost
-  if (typeof raw['tool_call'] === 'boolean') model.tool_call = raw['tool_call']
-  if (typeof raw['reasoning'] === 'boolean') model.reasoning = raw['reasoning']
-  if (Array.isArray(raw['modalities'])) {
-    const modalities = raw['modalities'].filter((entry) => typeof entry === 'string')
-    if (modalities.length > 0) model.modalities = modalities
-  }
-  return model
 }
 
 function classify(
@@ -318,17 +266,9 @@ function buildProvider(
   const rawApi = raw['api']
   const payloadApi =
     typeof rawApi === 'string' && rawApi.trim() !== '' ? rawApi.trim() : undefined
-  const models: ModelRow[] = []
-  if (isRecord(raw['models'])) {
-    for (const value of Object.values(raw['models'])) {
-      const model = pruneModel(value)
-      if (model !== undefined) models.push(model)
-    }
-  }
-  // Sorted, not source-ordered: the payload's key order is an implementation
-  // detail and the catalog must be byte-identical between runs.
-  models.sort((left, right) => (left.id === right.id ? 0 : left.id < right.id ? -1 : 1))
-
+  // Models are deliberately not copied: the provider is what we store, and a
+  // node asks the live `GET /models` for the rest. A copied list is stale the
+  // day after it is generated and would fight the provider's own answer.
   const name = raw['name']
   const doc = raw['doc']
   const env = raw['env']
@@ -339,7 +279,6 @@ function buildProvider(
     npm,
     ...(typeof doc === 'string' ? { doc } : {}),
     ...classify(npm, payloadApi, overrides[id]),
-    models,
   }
 }
 
@@ -379,12 +318,6 @@ function renderCatalog(providers: ProviderRow[], source: string): string {
     fields.push(`"protocol": ${JSON.stringify(provider.protocol)}`)
     if (provider.reason !== undefined) fields.push(`"reason": ${JSON.stringify(provider.reason)}`)
 
-    // One model per line keeps the file reviewable in a diff at ~2.3 MB.
-    const modelLines = provider.models.map((model) => `        ${JSON.stringify(model)}`)
-    const modelField =
-      modelLines.length === 0 ? '"models": []' : `"models": [\n${modelLines.join(',\n')}\n      ]`
-    fields.push(modelField)
-
     const body = fields.map((field, index) => {
       const comma = index === fields.length - 1 ? '' : ','
       return `      ${field}${comma}`
@@ -415,15 +348,13 @@ function declarationPorts(
 }
 
 function describe(provider: ProviderRow): string {
-  const count = provider.models.length
-  const models = `${count} model${count === 1 ? '' : 's'}`
   if (provider.transport === 'openai-completions') {
-    return `${provider.name} — ${models} over the openai-completions transport.`
+    return `${provider.name} — openai-completions. Models are discovered from the provider at run time.`
   }
   if (provider.reason === 'no-base-url') {
-    return `${provider.name} — ${models}; unsupported: no API base URL is known (see data/overrides.json).`
+    return `${provider.name} — unsupported: no API base URL is known (see data/overrides.json).`
   }
-  return `${provider.name} — ${models}; unsupported: speaks ${provider.protocol}, which z1 has no transport for (see DESIGN.md).`
+  return `${provider.name} — unsupported: speaks ${provider.protocol}, which z1 has no transport for (see DESIGN.md).`
 }
 
 function renderNodes(providers: ProviderRow[], source: string): string {
@@ -448,7 +379,6 @@ function renderNodes(providers: ProviderRow[], source: string): string {
     'export const nodes = [',
   ]
   for (const provider of providers) {
-    const model = defaultModel(provider)
     lines.push(
       '  {',
       `    id: ${JSON.stringify(nodeIdFor(provider.id))},`,
@@ -456,9 +386,9 @@ function renderNodes(providers: ProviderRow[], source: string): string {
       `    title: ${JSON.stringify(provider.name)},`,
       `    description: ${JSON.stringify(describe(provider))},`,
       `    category: ${JSON.stringify(NODE_CATEGORY)},`,
-      model === undefined
-        ? '    defaultConfig: {},'
-        : `    defaultConfig: { model: ${JSON.stringify(model)} },`,
+      // No model is baked in: the node discovers the provider's list and the
+      // graph pins one with `config.model`.
+      '    defaultConfig: {},',
       '    inputs: INPUT_PORTS,',
       '    outputs: OUTPUT_PORTS,',
       '    // A model turn costs money and may differ every time; never reuse it.',
@@ -578,21 +508,14 @@ interface Stats {
   supported: number
   unsupported: number
   byReason: Record<string, number>
-  models: number
-  supportedModels: number
 }
 
 function statsOf(providers: ProviderRow[]): Stats {
   const byReason: Record<string, number> = {}
   let supported = 0
-  let supportedModels = 0
-  let models = 0
   for (const provider of providers) {
-    models += provider.models.length
-    if (provider.transport === 'openai-completions') {
-      supported += 1
-      supportedModels += provider.models.length
-    } else {
+    if (provider.transport === 'openai-completions') supported += 1
+    else {
       const reason = provider.reason ?? 'unknown'
       byReason[reason] = (byReason[reason] ?? 0) + 1
     }
@@ -602,8 +525,6 @@ function statsOf(providers: ProviderRow[]): Stats {
     supported,
     unsupported: providers.length - supported,
     byReason,
-    models,
-    supportedModels,
   }
 }
 
@@ -614,7 +535,7 @@ function formatStats(stats: Stats): string {
     .join(', ')
   return [
     `providers ${stats.providers}: openai-completions ${stats.supported}, unsupported ${stats.unsupported}${reasons === '' ? '' : ` (${reasons})`}`,
-    `models ${stats.models}: ${stats.supportedModels} on supported providers`,
+    'models: discovered from each provider at run time, never stored',
   ].join('\n')
 }
 

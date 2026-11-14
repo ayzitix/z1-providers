@@ -10,20 +10,13 @@ import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { defaultModel, nodeIdFor } from '../lib/catalog.js'
+import { nodeIdFor } from '../lib/catalog.js'
 import { readJson, runScript, tempDir } from './helpers.ts'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const GENERATE = join(REPO, 'scripts', 'generate.ts')
 const FIXTURE = join(REPO, 'tests', 'fixtures', 'api.json')
 const OVERRIDES = join(REPO, 'data', 'overrides.json')
-
-interface ModelRow {
-  id: string
-  cost?: Record<string, number>
-  limit?: { context: number }
-  modalities?: string[]
-}
 
 interface ProviderRow {
   id: string
@@ -35,7 +28,6 @@ interface ProviderRow {
   transport: string
   protocol: string
   reason?: string
-  models: ModelRow[]
 }
 
 interface Catalog {
@@ -63,7 +55,7 @@ function generate(outDir: string, extra: string[] = []): void {
 
 const GENERATED = ['data/catalog.json', 'manifest.json', 'lib/providers.generated.js', 'index.js']
 
-test('generator classifies the fixture and picks a default model deterministically', () => {
+test('generator keeps connection data and discards the model catalog', () => {
   const out = tempDir('z1prov-gen')
   generate(out)
   const catalog = readJson<Catalog>(join(out, 'data', 'catalog.json'))
@@ -77,21 +69,13 @@ test('generator classifies the fixture and picks a default model deterministical
   const acme = provider(catalog, 'acme')
   assert.equal(acme.transport, 'openai-completions')
   assert.equal(acme.api, 'https://api.acme.test/v1', 'the payload URL wins')
-  // Tools first, then the widest window: acme-huge has 1M context but no tools.
-  assert.equal(defaultModel(acme), 'acme-pro')
-  assert.deepEqual(
-    acme.models.map((model) => model.id),
-    ['acme-huge', 'acme-legacy', 'acme-mini', 'acme-pro'],
-    'models are sorted by id',
-  )
-
-  const pro = acme.models.find((model) => model.id === 'acme-pro')
-  assert.ok(pro !== undefined)
-  assert.deepEqual(pro.cost, { input: 3, output: 15, cache_read: 0.3 }, 'tiered prices are pruned')
-  const legacy = acme.models.find((model) => model.id === 'acme-legacy')
-  assert.ok(legacy !== undefined)
-  assert.equal(legacy.cost, undefined)
-  assert.equal(legacy.limit, undefined)
+  // The fixture carries four acme models; none of them may appear here.
+  const raw = readFileSync(join(out, 'data', 'catalog.json'), 'utf8')
+  for (const id of ['acme-huge', 'acme-legacy', 'acme-mini', 'acme-pro']) {
+    assert.ok(!raw.includes(id), `catalog must not store model id ${id}`)
+  }
+  const node = readFileSync(join(out, 'lib', 'providers.generated.js'), 'utf8')
+  assert.match(node, /defaultConfig: \{\}/, 'no model is baked into a node')
 })
 
 test('a provider with no api uses the hand-written override, with its provenance kept', () => {
@@ -105,7 +89,6 @@ test('a provider with no api uses the hand-written override, with its provenance
   assert.equal(groq.api, overrides.providers['groq']!.baseURL)
   assert.equal(groq.api, 'https://api.groq.com/openai/v1')
   assert.match(overrides.providers['groq']!.doc, /^https:\/\//)
-  assert.equal(defaultModel(groq), 'groq-a')
 })
 
 test('an anthropic provider is unsupported, not guessed into an OpenAI transport', () => {
@@ -118,7 +101,6 @@ test('an anthropic provider is unsupported, not guessed into an OpenAI transport
   assert.equal(anthropic.reason, 'non-openai-protocol')
   assert.equal(anthropic.protocol, 'anthropic')
   assert.equal(anthropic.api, undefined)
-  assert.equal(defaultModel(anthropic), 'claude-small')
 
   const nodes = readFileSync(join(out, 'lib', 'providers.generated.js'), 'utf8')
   assert.match(nodes, /id: "z1\.providers\.anthropic"/)
@@ -166,7 +148,7 @@ test('--check passes on a fresh generation and fails after an edit', () => {
   const ok = runScript(GENERATE, ['--from-json', FIXTURE, '--out', out, '--overrides', OVERRIDES, '--check'])
   assert.equal(ok.status, 0, ok.stderr)
   assert.match(ok.stdout, /providers 3/)
-  assert.match(ok.stdout, /models 8/)
+  assert.match(ok.stdout, /models: discovered from each provider at run time/)
 
   const manifestPath = join(out, 'manifest.json')
   const manifest = readJson<{ nodes: unknown[] }>(manifestPath)
