@@ -1,0 +1,53 @@
+{
+  "$comment": [
+    "Hand-maintained API base URLs for providers whose models.dev entry has no",
+    "`api` field. An entry is only used when the provider speaks the",
+    "openai-completions transport; it never overrides a URL that the payload",
+    "already carries, and it never changes a provider's protocol.",
+    "Every URL below was reachability-checked (the API root answers 401/403",
+    "without a key, or 200 where the endpoint is public). Do not add a URL you",
+    "have not seen in the provider's own documentation."
+  ],
+  "providers": {
+    "openai": {
+      "baseURL": "https://api.openai.com/v1",
+      "doc": "https://platform.openai.com/docs/api-reference",
+      "note": "payload has no api field; URL is the documented API root"
+    },
+    "groq": {
+      "baseURL": "https://api.groq.com/openai/v1",
+      "doc": "https://console.groq.com/docs/api-reference",
+      "note": "OpenAI-compatible path under the /openai prefix"
+    },
+    "cerebras": {
+      "baseURL": "https://api.cerebras.ai/v1",
+      "doc": "https://inference-docs.cerebras.ai/api-reference",
+      "note": "payload has no api field"
+    },
+    "xai": {
+      "baseURL": "https://api.x.ai/v1",
+      "doc": "https://docs.x.ai/docs/api-reference",
+      "note": "payload has no api field"
+    },
+    "togetherai": {
+      "baseURL": "https://api.together.xyz/v1",
+      "doc": "https://docs.together.ai/reference/chat-completions",
+      "note": "payload has no api field"
+    },
+    "deepinfra": {
+      "baseURL": "https://api.deepinfra.com/v1/openai",
+      "doc": "https://deepinfra.com/docs/openai_api",
+      "note": "OpenAI-compatible deployment paths live under /v1/openai"
+    },
+    "perplexity": {
+      "baseURL": "https://api.perplexity.ai",
+      "doc": "https://docs.perplexity.ai/api-reference/chat-completions",
+      "note": "no /v1 segment; paths are /chat/completions"
+    },
+    "mistral": {
+      "baseURL": "https://api.mistral.ai/v1",
+      "doc": "https://docs.mistral.ai/api/",
+      "note": "unused today: the provider speaks @ai-sdk/mistral, which is not OpenAI-compatible"
+    }
+  }
+}

@@ -1,0 +1,98 @@
+{
+  "acme": {
+    "id": "acme",
+    "env": ["ACME_API_KEY"],
+    "npm": "@ai-sdk/openai-compatible",
+    "api": "https://api.acme.test/v1",
+    "name": "Acme",
+    "doc": "https://acme.test/docs",
+    "models": {
+      "acme-huge": {
+        "id": "acme-huge",
+        "name": "Acme Huge",
+        "limit": { "context": 1000000, "output": 8000 },
+        "cost": { "input": 1, "output": 2 },
+        "tool_call": false,
+        "reasoning": false,
+        "modalities": ["text"]
+      },
+      "acme-mini": {
+        "id": "acme-mini",
+        "name": "Acme Mini",
+        "limit": { "context": 8000, "output": 2000 },
+        "cost": { "input": 0.1, "output": 0.3, "cache_read": 0.01 },
+        "tool_call": true,
+        "reasoning": false,
+        "modalities": ["text"]
+      },
+      "acme-pro": {
+        "id": "acme-pro",
+        "name": "Acme Pro",
+        "limit": { "context": 200000, "output": 16000 },
+        "cost": { "input": 3, "output": 15, "cache_read": 0.3, "tiers": [{ "tier": { "type": "context", "size": 200000 }, "input": 6 }] },
+        "tool_call": true,
+        "reasoning": true,
+        "modalities": ["text", "image"]
+      },
+      "acme-legacy": {
+        "id": "acme-legacy",
+        "name": "Acme Legacy",
+        "tool_call": false
+      }
+    }
+  },
+  "anthropic": {
+    "id": "anthropic",
+    "env": ["ANTHROPIC_API_KEY"],
+    "npm": "@ai-sdk/anthropic",
+    "name": "Anthropic",
+    "doc": "https://docs.anthropic.com/en/docs/about-claude/models",
+    "models": {
+      "claude-small": {
+        "id": "claude-small",
+        "name": "Claude Small",
+        "limit": { "context": 200000 },
+        "cost": { "input": 3, "output": 15 },
+        "tool_call": true,
+        "reasoning": false,
+        "modalities": ["text", "image"]
+      },
+      "claude-tiny": {
+        "id": "claude-tiny",
+        "name": "Claude Tiny",
+        "limit": { "context": 32000 },
+        "cost": { "input": 0.8, "output": 4 },
+        "tool_call": true,
+        "reasoning": false,
+        "modalities": ["text"]
+      }
+    }
+  },
+  "groq": {
+    "id": "groq",
+    "env": ["GROQ_API_KEY"],
+    "npm": "@ai-sdk/groq",
+    "name": "Groq",
+    "doc": "https://console.groq.com/docs/models",
+    "models": {
+      "groq-a": {
+        "id": "groq-a",
+        "name": "Groq A",
+        "limit": { "context": 131072 },
+        "cost": { "input": 0.59, "output": 0.79 },
+        "tool_call": true,
+        "reasoning": false,
+        "modalities": ["text"]
+      },
+      "groq-b": {
+        "id": "groq-b",
+        "name": "Groq B",
+        "limit": { "context": 8192 },
+        "cost": { "input": 0.05, "output": 0.08 },
+        "tool_call": true,
+        "reasoning": false,
+        "modalities": ["text"]
+      }
+    }
+  }
+}
