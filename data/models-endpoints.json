@@ -1,0 +1,4 @@
+{
+  "note": "Model-catalog addresses that differ from GET {baseURL}/models. Each entry needs a doc URL. Empty today: every supported models.dev provider answers the standard path.",
+  "providers": {}
+}

@@ -22,9 +22,16 @@ uses the first id and logs a warning telling you to pin one. With it, no lookup
 happens at all.
 
 ```bash
-z1 models openai          # what the provider serves right now
-z1 models --json | jq .
+node scripts/models.ts openai --config ./z1.config.json
+node scripts/models.ts --all --json
 ```
+
+Discovery lives in this module, not in the z1 SDK. The SDK knows a base URL and a
+credential and offers one primitive — an authenticated `GET` with a path and a
+query. Which path (`/models`, `/api/tags`, `/openai/models`), which query
+(`?api-version`, `?type=text`) and how to read the body are provider knowledge,
+and they live in `lib/models.js` plus the hand-maintained
+`data/models-endpoints.json`.
 
 The ports mirror `z1.llm.chat` (`in`, `messages`, `prompt`, `system`, `tools` →
 `text`, `message`, `toolCalls`, `usage`, `hasToolCalls`, `out`), so a provider
@@ -78,11 +85,21 @@ unset.
 
 ## Model discovery
 
-`ctx.llm.models(provider)` is a host capability: the host holds the key, calls
-`GET {baseURL}/models`, checks the same `llm` grant as `chat`, and caches the
-answer per provider for five minutes (concurrent callers share one request). A
-provider that does not implement the endpoint fails with its own status, and the
-node then requires an explicit `config.model`.
+`ctx.llm.get({ provider, path, query })` is the only host capability involved:
+the host appends the path to the provider's base URL, injects the credential,
+applies the retry policy and returns the raw body. It is GET-only — a model turn
+must go through `ctx.llm.chat` so it is journaled — and the path cannot leave the
+configured base URL.
+
+Everything above that is this module:
+
+- `lib/models.js` asks `<path>`, parses `{data:[{id}]}`, `{models:[{name}]}`, a
+  bare array or `{result:[…]}`, and dedupes ids in the provider's order;
+- `data/models-endpoints.json` overrides the address per provider. It is empty
+  today because all 211 supported providers answer `/models`; an exception is a
+  data edit, not an SDK change;
+- a non-2xx answer becomes "provider answered 404 for GET /models — set
+  config.model explicitly", not a silent empty list.
 
 The list is never written to disk and never merged into `data/catalog.json`. A
 model id the provider no longer serves produces an error enriched with the ids it
@@ -123,8 +140,8 @@ The generator also accepts `--from-json <file>` for an offline copy.
   provider from the module manifest is the next change (see `DESIGN.md`).
 - `--all` writes 206 providers into one file. For a real project, install the
   handful you use.
-- Discovery costs one request per provider per five minutes; a provider without
-  `/models` needs an explicit `config.model`.
+- Discovery costs one authenticated request per discovery; a provider without a
+  catalog endpoint needs an explicit `config.model`.
 - A discovered list is ids only. Context windows, pricing and capabilities are
   provider extensions, not part of the OpenAI `/models` contract, so this module
   does not pretend to know them.

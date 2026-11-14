@@ -16,14 +16,16 @@ interface Recorded {
   requests: unknown[]
   deltas: { port: string; chunk: unknown }[]
   logs: { level: string; message: string }[]
-  listCalls: string[]
+  getCalls: { provider: string; path: string }[]
 }
 
 interface ContextOptions {
   config?: unknown
   inputs?: unknown
-  models?: { id: string }[]
-  modelsError?: Error
+  /** Body the fake provider returns from `ctx.llm.get`. */
+  catalog?: unknown
+  catalogStatus?: number
+  getError?: Error
   chat?: (request: unknown) => unknown
 }
 
@@ -43,10 +45,18 @@ function makeContext(recorded: Recorded, options: ContextOptions = {}) {
       return undefined
     },
     llm: {
-      async models(provider: string) {
-        recorded.listCalls.push(provider)
-        if (options.modelsError !== undefined) throw options.modelsError
-        return options.models ?? [{ id: 'listed-a' }, { id: 'listed-b' }]
+      async get(request: { provider: string; path: string }) {
+        recorded.getCalls.push({ provider: request.provider, path: request.path })
+        if (options.getError !== undefined) throw options.getError
+        const status = options.catalogStatus ?? 200
+        return {
+          status,
+          ok: status >= 200 && status < 300,
+          body: JSON.stringify(
+            options.catalog ?? { data: [{ id: 'listed-a' }, { id: 'listed-b' }] },
+          ),
+          truncated: false,
+        }
       },
       async chat(request: unknown, onDelta?: (delta: { type: string; text: string }) => void) {
         recorded.requests.push(request)
@@ -67,7 +77,7 @@ function makeContext(recorded: Recorded, options: ContextOptions = {}) {
 }
 
 function fresh(): Recorded {
-  return { requests: [], deltas: [], logs: [], listCalls: [] }
+  return { requests: [], deltas: [], logs: [], getCalls: [] }
 }
 
 function providerNode(providerId: string) {
@@ -102,7 +112,7 @@ test('a pinned model is used without a discovery call', async () => {
     }) as never,
   )
 
-  assert.deepEqual(recorded.listCalls, [], 'a pinned model costs no lookup')
+  assert.deepEqual(recorded.getCalls, [], 'a pinned model costs no lookup')
   assert.deepEqual(recorded.requests, [
     {
       model: { provider: 'openai', model: 'gpt-4.1-mini' },
@@ -130,11 +140,11 @@ test('without config.model the node takes the first live id and says so', async 
     makeContext(recorded, {
       config: {},
       inputs: { prompt: 'hi' },
-      models: [{ id: 'live-first' }, { id: 'live-second' }],
+      catalog: { data: [{ id: 'live-first' }, { id: 'live-second' }] },
     }) as never,
   )
 
-  assert.deepEqual(recorded.listCalls, ['openai'])
+  assert.deepEqual(recorded.getCalls, [{ provider: 'openai', path: '/models' }])
   const request = recorded.requests[0] as { model: { model: string } }
   assert.equal(request.model.model, 'live-first')
   const warning = recorded.logs.find((entry) => entry.level === 'warn')
@@ -148,7 +158,7 @@ test('an empty live list fails instead of guessing', async () => {
   const node = providerNode('openai')
   await assert.rejects(
     node.execute(
-      makeContext(recorded, { config: {}, inputs: { prompt: 'hi' }, models: [] }) as never,
+      makeContext(recorded, { config: {}, inputs: { prompt: 'hi' }, catalog: { data: [] } }) as never,
     ),
     /listed no models; set config\.model explicitly/,
   )
@@ -162,12 +172,12 @@ test('a provider without discovery says so and names the fallback', async () => 
       makeContext(recorded, {
         config: {},
         inputs: { prompt: 'hi' },
-        modelsError: new Error('model discovery failed for https://x/v1 (404)'),
+        getError: new Error('fetch failed: ECONNREFUSED'),
       }) as never,
     ),
     (error: Error) => {
-      assert.match(error.message, /cannot discover models for "openai"/)
-      assert.match(error.message, /404/)
+      assert.match(error.message, /cannot read \/models for "openai"/)
+      assert.match(error.message, /ECONNREFUSED/)
       assert.match(error.message, /Set config\.model explicitly/)
       return true
     },
@@ -183,7 +193,7 @@ test('an unsupported provider explains the missing transport', async () => {
     return true
   })
   assert.equal(recorded.requests.length, 0)
-  assert.equal(recorded.listCalls.length, 0, 'no discovery for a provider we cannot call')
+  assert.equal(recorded.getCalls.length, 0, 'no discovery for a provider we cannot call')
 })
 
 test('a no-base-url provider says how to add one', async () => {
@@ -202,7 +212,7 @@ test('a model-not-found error is enriched with the live ids', async () => {
       makeContext(recorded, {
         config: { model: 'gpt-retired' },
         inputs: { prompt: 'hi' },
-        models: [{ id: 'gpt-a' }, { id: 'gpt-b' }],
+        catalog: { data: [{ id: 'gpt-a' }, { id: 'gpt-b' }] },
         chat: async () => {
           throw new Error('openai-compatible request failed (404 Not Found: model not found)')
         },
@@ -235,7 +245,7 @@ test('an unrelated chat error is not padded with model ids', async () => {
       return true
     },
   )
-  assert.deepEqual(recorded.listCalls, [], 'no lookup for an error that is not about a model')
+  assert.deepEqual(recorded.getCalls, [], 'no lookup for an error that is not about a model')
 })
 
 test('a connected system port wins over config.system and messages pass through', async () => {

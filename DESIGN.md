@@ -12,11 +12,15 @@ provider. Today the user runs `scripts/install-providers.ts` and edits a project
 config file. That works, but the provider list is data the module already
 carries; making the user duplicate it in every project is a wart.
 
-The other half is already solved the right way: models are **not** stored. A node
-asks `ctx.llm.models(provider)` and the host performs `GET {baseURL}/models`
-with the credential it holds, caches the answer in memory and enforces the same
-`llm` grant as `chat`. Nothing about a provider's catalogue is committed, so no
-list can go stale; the only thing left to declare is the connection.
+The other half is already solved the right way: models are **not** stored, and
+the address is not in the SDK. The host offers one primitive,
+`ctx.llm.get({ provider, path, query })`: it appends the path to the configured
+base URL, injects the credential, applies retries and returns the raw body,
+gated by the same `llm` grant as `chat`. Every provider-specific detail — the
+path, the query, the body shape — lives in `lib/models.js` and
+`data/models-endpoints.json`. That boundary is deliberate: `/models` is correct
+for most providers and wrong for enough of them (Azure, Cloudflare, Ollama,
+Venice) that the SDK must not learn any of it.
 
 ## Proposal
 
